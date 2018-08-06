@@ -6,7 +6,8 @@ import (
     "os/exec"
     "regexp"
     "strings"
-
+	
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 )
 
 //the passive TCP port where OVS entries are listening
@@ -19,9 +20,30 @@ func GetMetrics(w http.ResponseWriter, r *http.Request) {
     if ovsIP == "" {
     	fmt.Fprintln(w, "Bad request!\nCorrect format is: http://<IP>:<Port>/flows?tartget=<targetIP>")
     }
+
+
+    //Get all services from Kubernetes API
+    services, err := clientset.CoreV1().Services("").List(metav1.ListOptions{})
+    if err != nil {
+        panic(err.Error())
+    }
     
+    //Get all nodes from Kubernetes API
+    nodes, err := clientset.CoreV1().Nodes().List(metav1.ListOptions{})
+		if err != nil {
+			panic(err.Error())
+	}
+
+    //get info on all pods in the cluster
+    pods, err := clientset.CoreV1().Pods("").List(metav1.ListOptions{})
+    if err != nil {
+        panic(err.Error())
+    }
+    
+    //Flow specific staticstics
+    //
     //creating ovs-ofctl command for flow staticstics
-    cmd := exec.Command("ovs-ofctl", "dump-flows", "tcp:" + ovsIP + ":" + ovsPort)
+    cmd := exec.Command("ovs-ofctl", "-O", "openflow13", "dump-flows", "tcp:" + ovsIP + ":" + ovsPort)
     out, err := cmd.Output()
 	outString := string(out)
 	//if error was occured we return
@@ -105,6 +127,47 @@ func GetMetrics(w http.ResponseWriter, r *http.Request) {
     	
     }
     
+    //Interating through the flows to add some extra information based on Service and Node information
+    for i,_ := range flowEntries {
+    
+        //Cheking for ServiceIPs
+        for _, service := range services.Items {
+	        if strings.Contains(flowEntries[i].Action, service.Spec.ClusterIP) {
+                flowEntries[i].ServiceName = service.GetName()
+                flowEntries[i].ServiceNamespace = service.GetNamespace()
+                flowEntries[i].ServiceIP = service.Spec.ClusterIP
+            }
+
+	        if strings.Contains(flowEntries[i].Match, service.Spec.ClusterIP) {
+                flowEntries[i].ServiceName = service.GetName()
+                flowEntries[i].ServiceNamespace = service.GetNamespace()
+                flowEntries[i].ServiceIP = service.Spec.ClusterIP
+            }
+
+        }
+        
+        //Cheking for NodePOD CIDRs
+        for _, node := range nodes.Items {
+            //this code should work if we ever start to add PodCIDR information to Kubernetes API
+            //if strings.Contains(flowEntries[i].Match, node.Spec.PodCIDR) {
+            //    flowEntries[i].ServiceName = node.GetName()
+            //    flowEntries[i].ServiceIP = node.Status.Addresses
+            //}
+
+            podCidr := "10.244."
+            re := regexp.MustCompile("[0-9]+.[0-9]+.[0-9]+.([0-9]+)")
+            subMatch := re.FindStringSubmatch(node.Status.Addresses[0].Address)
+            if len(subMatch) > 1 {
+                podCidr += subMatch[1]
+            }
+            podCidr += ".0/24"
+            if strings.Contains(flowEntries[i].Match, podCidr) {
+                flowEntries[i].NodeName = node.GetName()
+                flowEntries[i].NodeIP = node.Status.Addresses[0].Address
+            }
+        }
+    }
+    
     //Creating Prometheus compatible output for:
     //	- number of packets as "flowPackets" type Counter
     //	- number of bytes as "flowBytes" type Counter
@@ -119,7 +182,8 @@ func GetMetrics(w http.ResponseWriter, r *http.Request) {
     		"flowPackets{match=\""  + entry.Match + 
     		"\",action=\""	 		+ entry.Action +
     		"\",table=\"" 			+ entry.Table +
-    		"\",priority=\""		+ entry.Priority +
+    		"\",priority=\""		+ entry.Priority + 
+                                      extraInfo(entry) +
     		"\"} "					+ entry.Packets)    		 
     }
      
@@ -132,6 +196,7 @@ func GetMetrics(w http.ResponseWriter, r *http.Request) {
     		"\",action=\""	 		+ entry.Action +
     		"\",table=\"" 			+ entry.Table +
     		"\",priority=\""		+ entry.Priority +
+                                      extraInfo(entry) +
     		"\"} "					+ entry.Bytes)    		 
     }
     
@@ -144,6 +209,7 @@ func GetMetrics(w http.ResponseWriter, r *http.Request) {
     		"\",action=\""	 		+ entry.Action +
     		"\",table=\"" 			+ entry.Table +
     		"\",priority=\""		+ entry.Priority +
+                                      extraInfo(entry) +
     		"\"} "					+ entry.Duration)    		 
     }
     
@@ -156,9 +222,12 @@ func GetMetrics(w http.ResponseWriter, r *http.Request) {
     		"\",action=\""	 		+ entry.Action +
     		"\",table=\"" 			+ entry.Table +
     		"\",priority=\""		+ entry.Priority +
+                                      extraInfo(entry) +
     		"\"} "					+ entry.IdleAge)    		 
     }
     
+    //Port specific staticstics
+    //
     //Creating ovs-ofctl command for port statisctics
     cmd = exec.Command("ovs-ofctl", "dump-ports", "tcp:" + ovsIP + ":" + ovsPort)
     out, err = cmd.Output()
@@ -197,6 +266,23 @@ func GetMetrics(w http.ResponseWriter, r *http.Request) {
 			portEntries[int(i/2)].TxDrops      = noQuestionMark(subMatch[11])
 			portEntries[int(i/2)].TxErrors     = noQuestionMark(subMatch[12])
 			portEntries[int(i/2)].TxCollisions = noQuestionMark(subMatch[13])
+
+            for _, pod := range pods.Items {
+                if (pod.Status.HostIP == ovsIP) {
+                    octets := strings.Split(pod.Status.PodIP, ".")
+                    if (octets[len(octets)-1] == subMatch[1]) {
+                        portEntries[int(i/2)].PodName = pod.GetName()
+                        portEntries[int(i/2)].PodNamespace = pod.GetNamespace()
+                        portEntries[int(i/2)].PodIP = pod.Status.PodIP
+                    }
+                }                
+            }
+            
+            if (subMatch[1] == "LOCAL") {
+                portEntries[int(i/2)].PodName = "ToKernel"
+                portEntries[int(i/2)].PodNamespace = "HostNetworking"
+                portEntries[int(i/2)].PodIP = ovsIP
+            }
     	} else {
     		fmt.Fprintln(w, "Output is: ", subMatch, twoLines)
     		return
@@ -216,7 +302,7 @@ func GetMetrics(w http.ResponseWriter, r *http.Request) {
     fmt.Fprintln(w, "# TYPE portRxPackets counter")
     for _,entry := range portEntries {
     	fmt.Fprintln(w, 
-    		"portRxPackets{portNumber=\"" + entry.PortNumber + 
+    		"portRxPackets{portNumber=\"" + entry.PortNumber + "\",podName=\"" + entry.PodName + "\",podNamespace=\"" + entry.PodNamespace + "\",podIP=\"" + entry.PodIP +
     		"\"} "					      + entry.RxPackets)    		 
     }
  
@@ -225,7 +311,7 @@ func GetMetrics(w http.ResponseWriter, r *http.Request) {
     fmt.Fprintln(w, "# TYPE portTxPackets counter")
     for _,entry := range portEntries {
     	fmt.Fprintln(w, 
-    		"portTxPackets{portNumber=\"" + entry.PortNumber + 
+    		"portTxPackets{portNumber=\"" + entry.PortNumber + "\",podName=\"" + entry.PodName + "\",podNamespace=\"" + entry.PodNamespace + "\",podIP=\"" + entry.PodIP +
     		"\"} "					      + entry.TxPackets)    		 
     }
 
@@ -234,7 +320,7 @@ func GetMetrics(w http.ResponseWriter, r *http.Request) {
     fmt.Fprintln(w, "# TYPE portRxBytes counter")
     for _,entry := range portEntries {
     	fmt.Fprintln(w, 
-    		"portRxBytes{portNumber=\"" + entry.PortNumber + 
+    		"portRxBytes{portNumber=\"" + entry.PortNumber + "\",podName=\"" + entry.PodName + "\",podNamespace=\"" + entry.PodNamespace + "\",podIP=\"" + entry.PodIP +
     		"\"} "					    + entry.RxBytes)    		 
     }
  
@@ -243,7 +329,7 @@ func GetMetrics(w http.ResponseWriter, r *http.Request) {
     fmt.Fprintln(w, "# TYPE portTxBytes counter")
     for _,entry := range portEntries {
     	fmt.Fprintln(w, 
-    		"portTxBytes{portNumber=\"" + entry.PortNumber + 
+    		"portTxBytes{portNumber=\"" + entry.PortNumber + "\",podName=\"" + entry.PodName + "\",podNamespace=\"" + entry.PodNamespace + "\",podIP=\"" + entry.PodIP +
     		"\"} "					    + entry.TxBytes)    		 
     }
 
@@ -252,7 +338,7 @@ func GetMetrics(w http.ResponseWriter, r *http.Request) {
     fmt.Fprintln(w, "# TYPE portRxDrops counter")
     for _,entry := range portEntries {
     	fmt.Fprintln(w, 
-    		"portRxDrops{portNumber=\"" + entry.PortNumber + 
+    		"portRxDrops{portNumber=\"" + entry.PortNumber + "\",podName=\"" + entry.PodName + "\",podNamespace=\"" + entry.PodNamespace + "\",podIP=\"" + entry.PodIP +
     		"\"} "					    + entry.RxDrops)    		 
     }
  
@@ -261,10 +347,12 @@ func GetMetrics(w http.ResponseWriter, r *http.Request) {
     fmt.Fprintln(w, "# TYPE portTxDrops counter")
     for _,entry := range portEntries {
     	fmt.Fprintln(w, 
-    		"portTxDrops{portNumber=\"" + entry.PortNumber + 
+    		"portTxDrops{portNumber=\"" + entry.PortNumber + "\",podName=\"" + entry.PodName + "\",podNamespace=\"" + entry.PodNamespace + "\",podIP=\"" + entry.PodIP +
     		"\"} "					    + entry.TxDrops)    		 
     }
 
+    //Group specific statistics
+    //
     //creating ovs-ofctl command for groups
     cmd = exec.Command("ovs-ofctl", "-O", "openflow13", "dump-groups", "tcp:" + ovsIP + ":" + ovsPort)
     out, err = cmd.Output()
@@ -306,8 +394,27 @@ func GetMetrics(w http.ResponseWriter, r *http.Request) {
 			if len(subMatch) > 1 {
 				bucketEntries[j-1].Actions = subMatch[1]
 			}	
+
+            //iterate through Kubernetes PODs to find the POD backend that this bucket routes
+            for _, pod := range pods.Items {
+            	//the "->" is recquired so that an IP like "10.244.0.2" does not match to "10.244.0.20"
+                if (strings.Contains(buckets[j], pod.Status.PodIP + "->")) {
+                    bucketEntries[j-1].PodName = pod.GetName()
+                    bucketEntries[j-1].PodNamespace = pod.GetNamespace()
+                    bucketEntries[j-1].PodIP = pod.Status.PodIP
+                }                
+            }
     	}    	
     	groupEntries[i].Buckets = bucketEntries
+  
+		//iterate through Flow Entries to find which flow service this group rule belongs
+		for _, entry := range flowEntries {
+			if (strings.Contains(entry.Action, "group:" + groupEntries[i].GroupId)) {
+				groupEntries[i].ServiceName = entry.ServiceName
+				groupEntries[i].ServiceNamespace = entry.ServiceNamespace
+				groupEntries[i].ServiceIP = entry.ServiceIP
+			}
+		}
 	}
 	
 
@@ -393,6 +500,9 @@ func GetMetrics(w http.ResponseWriter, r *http.Request) {
     	fmt.Fprintln(w,
 			"groupPackets{groupId=\"" + entry.GroupId +
 			"\",groupType=\"" 		  + entry.GroupType +
+			"\",serviceName=\"" 	  + entry.ServiceName +
+			"\",serviceNamespace=\""  + entry.ServiceNamespace +
+			"\",serviceIP=\"" 	      + entry.ServiceIP +
 			"\"} "					  + entry.Packets)    		 
 	}
 
@@ -403,6 +513,9 @@ func GetMetrics(w http.ResponseWriter, r *http.Request) {
     	fmt.Fprintln(w,
 			"groupBytes{groupId=\""   + entry.GroupId +
 			"\",groupType=\"" 		  + entry.GroupType +
+			"\",serviceName=\"" 	  + entry.ServiceName +
+			"\",serviceNamespace=\""  + entry.ServiceNamespace +
+			"\",serviceIP=\"" 	      + entry.ServiceIP +
 			"\"} "					  + entry.Bytes)    		 
 	}
 	
@@ -413,6 +526,9 @@ func GetMetrics(w http.ResponseWriter, r *http.Request) {
     	fmt.Fprintln(w,
 			"groupDuration{groupId=\""+ entry.GroupId +
 			"\",groupType=\"" 		  + entry.GroupType +
+			"\",serviceName=\"" 	  + entry.ServiceName +
+			"\",serviceNamespace=\""  + entry.ServiceNamespace +
+			"\",serviceIP=\"" 	      + entry.ServiceIP +
 			"\"} "					  + entry.Duration)    		 
 	}	
 
@@ -424,7 +540,13 @@ func GetMetrics(w http.ResponseWriter, r *http.Request) {
 	    	fmt.Fprintln(w,
 				"groupBucketPackets{groupId=\""  + entry.GroupId +
 				"\",groupType=\"" 				 + entry.GroupType +
+				"\",serviceName=\"" 	         + entry.ServiceName +
+				"\",serviceNamespace=\""         + entry.ServiceNamespace +
+				"\",serviceIP=\"" 	             + entry.ServiceIP +
 				"\",bucketActions=\"" 			 + bucket.Actions +
+				"\",podName=\""		 			 + bucket.PodName +
+				"\",podNamespace=\"" 			 + bucket.PodNamespace +
+				"\",podIP=\""		 			 + bucket.PodIP +
 				"\"} "					         + bucket.Packets)    		 
 	    }
 	}
@@ -437,7 +559,13 @@ func GetMetrics(w http.ResponseWriter, r *http.Request) {
 	    	fmt.Fprintln(w,
 				"groupBucketBytes{groupId=\""    + entry.GroupId +
 				"\",groupType=\"" 				 + entry.GroupType +
+				"\",serviceName=\"" 	         + entry.ServiceName +
+				"\",serviceNamespace=\""         + entry.ServiceNamespace +
+				"\",serviceIP=\"" 	             + entry.ServiceIP +
 				"\",bucketActions=\"" 			 + bucket.Actions +
+				"\",podName=\""		 			 + bucket.PodName +
+				"\",podNamespace=\"" 			 + bucket.PodNamespace +
+				"\",podIP=\""		 			 + bucket.PodIP +
 				"\"} "					         + bucket.Bytes)    		 
 	    }
 	}
@@ -450,3 +578,15 @@ func noQuestionMark(s string) string {
 	}
 	return s
 }
+
+func extraInfo(entry Flow) string {
+    var info string
+    if entry.ServiceName != "" {
+        info = "\",serviceName=\"" + entry.ServiceName + "\",serviceNamespace=\"" + entry.ServiceNamespace + "\",serviceIP=\"" + entry.ServiceIP  
+    }
+    if entry.NodeName != "" {
+        info = "\",nodeName=\"" + entry.NodeName + "\",nodeIP=\"" + entry.NodeIP  
+    }        
+    return info
+}
+

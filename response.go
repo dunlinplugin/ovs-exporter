@@ -17,6 +17,11 @@ type Flow struct {
     Priority	string		`json:"proirity"`
     Match		string		`json:"match"`
     Action		string		`json:"action"`
+    ServiceName string      `json:"servicename"`
+    ServiceIP   string      `json:"serviceip"`
+    ServiceNamespace string `json:"servicenamespace"`
+    NodeName    string      `json:"nodename"`
+    NodeIP      string      `json:"nodeip"`
 }
 
 type Flows []Flow
@@ -35,6 +40,9 @@ type Port struct {
     RxOverruns	 string		`json:"rxovverruns"`
     RxCrcErrors	 string		`json:"rxcrcerrors"`
     TxCollisions string		`json:"txcollisions"`
+    PodName      string     `json:"podname"`
+    PodNamespace string     `json:"podnamespace"`
+    PodIP        string     `json:"podip"`
 }
 
 type Ports []Port
@@ -46,13 +54,19 @@ type Group struct {
     Duration  string	`json:"duration"`
     Bytes     string	`json:"bytes"`
     Packets   string    `json:"packets"`
+    ServiceName string  `json:"servicename"`
+    ServiceIP   string  `json:"serviceip"`
+    ServiceNamespace string      `json:"servicenamespace"`
 }
 
 type Bucket struct {
 //    BucketId  string    `json:"bucketid"` // for now I see no real usage of BucketID
-    Actions   string 	`json:"actions"` 
-    Bytes     string	`json:"bytes"`
-    Packets   string    `json:"packets"`
+    Actions      string 	`json:"actions"` 
+    Bytes        string		`json:"bytes"`
+    Packets      string     `json:"packets"`
+    PodName      string     `json:"podname"`
+    PodNamespace string     `json:"podnamespace"`
+    PodIP        string     `json:"podip"`
 }
 
 type Groups []Group
