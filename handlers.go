@@ -214,17 +214,18 @@ func GetMetrics(w http.ResponseWriter, r *http.Request) {
     }
     
     //flowIdleTime
-    fmt.Fprintln(w, "# HELP flowIdleTime The number of seconds have passed since the last packet has seen for the given OpenFlow entry")
-    fmt.Fprintln(w, "# TYPE flowIdleTime gauge")
-    for _,entry := range flowEntries {
-    	fmt.Fprintln(w, 
-    		"flowIdleTime{match=\""	+ entry.Match + 
-    		"\",action=\""	 		+ entry.Action +
-    		"\",table=\"" 			+ entry.Table +
-    		"\",priority=\""		+ entry.Priority +
-                                      extraInfo(entry) +
-    		"\"} "					+ entry.IdleAge)    		 
-    }
+    //currently this is not working since the ovs-ofctl -O openflow13 will not get this stat back
+    //fmt.Fprintln(w, "# HELP flowIdleTime The number of seconds have passed since the last packet has seen for the given OpenFlow entry")
+    //fmt.Fprintln(w, "# TYPE flowIdleTime gauge")
+    //for _,entry := range flowEntries {
+    //	fmt.Fprintln(w, 
+    //		"flowIdleTime{match=\""	+ entry.Match + 
+    //		"\",action=\""	 		+ entry.Action +
+    //		"\",table=\"" 			+ entry.Table +
+    //		"\",priority=\""		+ entry.Priority +
+    //                                  extraInfo(entry) +
+    //		"\"} "					+ entry.IdleAge)    		 
+    //}
     
     //Port specific staticstics
     //
