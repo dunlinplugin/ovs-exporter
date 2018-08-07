@@ -268,8 +268,11 @@ func GetMetrics(w http.ResponseWriter, r *http.Request) {
 			portEntries[int(i/2)].TxErrors     = noQuestionMark(subMatch[12])
 			portEntries[int(i/2)].TxCollisions = noQuestionMark(subMatch[13])
 
+            nodeName := ""
+            
             for _, pod := range pods.Items {
                 if (pod.Status.HostIP == ovsIP) {
+                	nodeName = pod.Spec.NodeName
                     octets := strings.Split(pod.Status.PodIP, ".")
                     if (octets[len(octets)-1] == subMatch[1]) {
                         portEntries[int(i/2)].PodName = pod.GetName()
@@ -280,10 +283,16 @@ func GetMetrics(w http.ResponseWriter, r *http.Request) {
             }
             
             if (subMatch[1] == "LOCAL") {
-                portEntries[int(i/2)].PodName = "ToKernel"
+                portEntries[int(i/2)].PodName = "ToHostPods-" + nodeName
                 portEntries[int(i/2)].PodNamespace = "HostNetworking"
                 portEntries[int(i/2)].PodIP = ovsIP
             }
+            if (subMatch[1] == "1") {
+                portEntries[int(i/2)].PodName = nodeName + "-toOtherNodes"
+                portEntries[int(i/2)].PodNamespace = "TunnelNetworking"
+                portEntries[int(i/2)].PodIP = ovsIP
+            }
+
     	} else {
     		fmt.Fprintln(w, "Output is: ", subMatch, twoLines)
     		return
