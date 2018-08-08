@@ -20,6 +20,10 @@ type Flow struct {
     ServiceName string      `json:"servicename"`
     ServiceIP   string      `json:"serviceip"`
     ServiceNamespace string `json:"servicenamespace"`
+    ServicePort string      `json:"serviceport"`
+    PodName 	string      `json:"podname"`
+    PodIP   	string      `json:"podip"`
+    PodNamespace string 	`json:"podnamespace"`
     NodeName    string      `json:"nodename"`
     NodeIP      string      `json:"nodeip"`
 }
@@ -57,6 +61,7 @@ type Group struct {
     ServiceName string  `json:"servicename"`
     ServiceIP   string  `json:"serviceip"`
     ServiceNamespace string      `json:"servicenamespace"`
+    ServicePort string  `json:"serviceport"`
 }
 
 type Bucket struct {

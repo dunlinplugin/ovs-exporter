@@ -124,13 +124,34 @@ func GetMetrics(w http.ResponseWriter, r *http.Request) {
     	if len(subMatch) > 1 {
     		flowEntries[i].Action = subMatch[1]
     	}
+
+    	//Service Port
+    	re = regexp.MustCompile("set_field:([0-9]+)->(udp|tcp)_src,")
+    	subMatch = re.FindStringSubmatch(entry)
+    	if len(subMatch) > 2 {
+    		flowEntries[i].ServicePort = subMatch[2] + ":" + subMatch[1]
+    	}
+		re = regexp.MustCompile("(udp|tcp),.*?tp_dst=([0-9]+)")
+    	subMatch = re.FindStringSubmatch(entry)
+    	if len(subMatch) > 2 {
+    		flowEntries[i].ServicePort = subMatch[1] + ":" + subMatch[2]
+    	}
     	
     }
     
     //Interating through the flows to add some extra information based on Service and Node information
     for i,_ := range flowEntries {
     
-        //Cheking for ServiceIPs
+        //Cheking for POD IP
+		for _, pod := range pods.Items {
+			if (strings.Contains(flowEntries[i].Match, pod.Status.PodIP + ",")) {
+				flowEntries[i].PodName = pod.GetName()
+                flowEntries[i].PodNamespace = pod.GetNamespace()
+                flowEntries[i].PodIP = pod.Status.PodIP
+			}
+		}
+		
+		//Cheking for ServiceIPs
         for _, service := range services.Items {
 	        if strings.Contains(flowEntries[i].Action, service.Spec.ClusterIP) {
                 flowEntries[i].ServiceName = service.GetName()
@@ -423,6 +444,7 @@ func GetMetrics(w http.ResponseWriter, r *http.Request) {
 				groupEntries[i].ServiceName = entry.ServiceName
 				groupEntries[i].ServiceNamespace = entry.ServiceNamespace
 				groupEntries[i].ServiceIP = entry.ServiceIP
+				groupEntries[i].ServicePort = entry.ServicePort
 			}
 		}
 	}
@@ -513,6 +535,7 @@ func GetMetrics(w http.ResponseWriter, r *http.Request) {
 			"\",serviceName=\"" 	  + entry.ServiceName +
 			"\",serviceNamespace=\""  + entry.ServiceNamespace +
 			"\",serviceIP=\"" 	      + entry.ServiceIP +
+			"\",servicePort=\"" 	  + entry.ServicePort +
 			"\"} "					  + entry.Packets)    		 
 	}
 
@@ -526,6 +549,7 @@ func GetMetrics(w http.ResponseWriter, r *http.Request) {
 			"\",serviceName=\"" 	  + entry.ServiceName +
 			"\",serviceNamespace=\""  + entry.ServiceNamespace +
 			"\",serviceIP=\"" 	      + entry.ServiceIP +
+			"\",servicePort=\"" 	  + entry.ServicePort +
 			"\"} "					  + entry.Bytes)    		 
 	}
 	
@@ -539,6 +563,7 @@ func GetMetrics(w http.ResponseWriter, r *http.Request) {
 			"\",serviceName=\"" 	  + entry.ServiceName +
 			"\",serviceNamespace=\""  + entry.ServiceNamespace +
 			"\",serviceIP=\"" 	      + entry.ServiceIP +
+			"\",servicePort=\"" 	  + entry.ServicePort +
 			"\"} "					  + entry.Duration)    		 
 	}	
 
@@ -553,6 +578,7 @@ func GetMetrics(w http.ResponseWriter, r *http.Request) {
 				"\",serviceName=\"" 	         + entry.ServiceName +
 				"\",serviceNamespace=\""         + entry.ServiceNamespace +
 				"\",serviceIP=\"" 	             + entry.ServiceIP +
+				"\",servicePort=\"" 	         + entry.ServicePort +
 				"\",bucketActions=\"" 			 + bucket.Actions +
 				"\",podName=\""		 			 + bucket.PodName +
 				"\",podNamespace=\"" 			 + bucket.PodNamespace +
@@ -572,6 +598,7 @@ func GetMetrics(w http.ResponseWriter, r *http.Request) {
 				"\",serviceName=\"" 	         + entry.ServiceName +
 				"\",serviceNamespace=\""         + entry.ServiceNamespace +
 				"\",serviceIP=\"" 	             + entry.ServiceIP +
+				"\",servicePort=\"" 	         + entry.ServicePort +
 				"\",bucketActions=\"" 			 + bucket.Actions +
 				"\",podName=\""		 			 + bucket.PodName +
 				"\",podNamespace=\"" 			 + bucket.PodNamespace +
@@ -592,7 +619,10 @@ func noQuestionMark(s string) string {
 func extraInfo(entry Flow) string {
     var info string
     if entry.ServiceName != "" {
-        info = "\",serviceName=\"" + entry.ServiceName + "\",serviceNamespace=\"" + entry.ServiceNamespace + "\",serviceIP=\"" + entry.ServiceIP  
+        info = "\",serviceName=\"" + entry.ServiceName + "\",serviceNamespace=\"" + entry.ServiceNamespace + "\",serviceIP=\"" + entry.ServiceIP + "\",servicePort=\"" + entry.ServicePort  
+    }
+    if entry.PodName != "" {
+        info = info + "\",podName=\"" + entry.PodName + "\",podNamespace=\"" + entry.PodNamespace + "\",podIP=\"" + entry.PodIP  
     }
     if entry.NodeName != "" {
         info = "\",nodeName=\"" + entry.NodeName + "\",nodeIP=\"" + entry.NodeIP  
